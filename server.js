@@ -6,11 +6,19 @@ const Stripe = require("stripe");
 
 const app = express();
 
+/* MIDDLEWARE */
 app.use(cors());
 app.use(express.json());
 
+/* STRIPE INIT */
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
+/* ✅ HOME ROUTE (FIXES "Cannot GET /") */
+app.get("/", (req, res) => {
+  res.send("RBS Store Backend is running 🚀");
+});
+
+/* 💳 CREATE STRIPE CHECKOUT SESSION */
 app.post("/create-checkout-session", async (req, res) => {
   try {
     const session = await stripe.checkout.sessions.create({
@@ -31,19 +39,22 @@ app.post("/create-checkout-session", async (req, res) => {
       cancel_url: "https://boluwatife-peter.github.io/rbs-shop/"
     });
 
-    res.json({
-      url: session.url
-    });
+    res.json({ url: session.url });
 
-  } catch (err) {
+  } catch (error) {
+    console.error("Stripe Error:", error.message);
+
     res.status(500).json({
-      error: err.message
+      error: error.message
     });
   }
 });
 
+/* 🚀 START SERVER (RENDER READY) */
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
   console.log("Server running on port " + PORT);
 });

@@ -3,28 +3,58 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const Stripe = require("stripe");
+const { createClient } = require("@supabase/supabase-js");
 
 const app = express();
 
-/* MIDDLEWARE */
+/* =========================
+   MIDDLEWARE
+========================= */
 app.use(cors());
 app.use(express.json());
 
-/* STRIPE INIT */
+/* =========================
+   STRIPE
+========================= */
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
-/* ✅ HOME ROUTE (FIXES "Cannot GET /") */
-app.get("/", (req, res) => {
-  res.send("RBS Store Backend is running 🚀");
-});
+/* =========================
+   SUPABASE
+========================= */
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
 
-/* 💳 CREATE STRIPE CHECKOUT SESSION */
+/* =========================
+   CREATE CHECKOUT SESSION
+========================= */
 app.post("/create-checkout-session", async (req, res) => {
   try {
+    const items = req.body.items;
+
+    // 1. Save order first (pending)
+    const { data: order, error: orderError } = await supabase
+      .from("orders")
+      .insert([
+        {
+          customer_name: req.body.customer_name || "Guest",
+          customer_email: req.body.customer_email || "",
+          product_name: items.map(i => i.name).join(", "),
+          quantity: items.length,
+          total_price: items.reduce((sum, i) => sum + i.price, 0),
+          status: "pending"
+        }
+      ])
+      .select()
+      .single();
+
+    if (orderError) throw orderError;
+
+    // 2. Create Stripe session
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
-
-      line_items: req.body.items.map(item => ({
+      line_items: items.map(item => ({
         price_data: {
           currency: "usd",
           product_data: {
@@ -35,24 +65,73 @@ app.post("/create-checkout-session", async (req, res) => {
         quantity: 1
       })),
 
-      success_url: "https://boluwatife-peter.github.io/rbs-shop/",
-      cancel_url: "https://boluwatife-peter.github.io/rbs-shop/"
+      success_url: process.env.SUCCESS_URL,
+      cancel_url: process.env.CANCEL_URL,
+
+      metadata: {
+        order_id: order.id
+      }
     });
 
     res.json({ url: session.url });
 
-  } catch (error) {
-    console.error("Stripe Error:", error.message);
-
-    res.status(500).json({
-      error: error.message
-    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
-/* 🚀 START SERVER (RENDER READY) */
+/* =========================
+   STRIPE WEBHOOK
+========================= */
+
+// IMPORTANT: raw body ONLY for webhook
+app.post(
+  "/webhook",
+  express.raw({ type: "application/json" }),
+  async (req, res) => {
+    const sig = req.headers["stripe-signature"];
+
+    let event;
+
+    try {
+      event = stripe.webhooks.constructEvent(
+        req.body,
+        sig,
+        process.env.STRIPE_WEBHOOK_SECRET
+      );
+    } catch (err) {
+      console.log("Webhook error:", err.message);
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    // PAYMENT SUCCESS
+    if (event.type === "checkout.session.completed") {
+      const session = event.data.object;
+
+      const orderId = session.metadata.order_id;
+
+      console.log("🔥 Payment successful for order:", orderId);
+
+      // update Supabase → PAID
+      const { error } = await supabase
+        .from("orders")
+        .update({ status: "paid" })
+        .eq("id", orderId);
+
+      if (error) {
+        console.log("Supabase update error:", error.message);
+      }
+    }
+
+    res.json({ received: true });
+  }
+);
+
+/* =========================
+   SERVER START
+========================= */
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log("Server running on port " + PORT);
 });

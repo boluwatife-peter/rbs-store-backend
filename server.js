@@ -8,7 +8,7 @@ const { createClient } = require("@supabase/supabase-js");
 const app = express();
 
 /* =========================
-   STRIPE + SUPABASE INIT
+   INIT
 ========================= */
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
@@ -18,13 +18,14 @@ const supabase = createClient(
 );
 
 /* =========================
-   MIDDLEWARE
+   MIDDLEWARE (IMPORTANT ORDER)
 ========================= */
 app.use(cors());
-app.use(express.json());
+
+/* ❌ DO NOT use express.json() BEFORE webhook */
 
 /* =========================
-   TEST ROUTE (SUPABASE CHECK)
+   TEST SUPABASE
 ========================= */
 app.get("/test-order", async (req, res) => {
   const { data, error } = await supabase
@@ -41,11 +42,9 @@ app.get("/test-order", async (req, res) => {
     ])
     .select();
 
-  if (error) {
-    return res.status(500).json(error);
-  }
+  if (error) return res.status(500).json(error);
 
-  res.json({ message: "Inserted successfully", data });
+  res.json({ message: "OK", data });
 });
 
 /* =========================
@@ -55,7 +54,6 @@ app.post("/create-checkout-session", async (req, res) => {
   try {
     const items = req.body.items || [];
 
-    // 1. Create order FIRST in Supabase
     const { data: order, error: orderError } = await supabase
       .from("orders")
       .insert([
@@ -75,7 +73,6 @@ app.post("/create-checkout-session", async (req, res) => {
       return res.status(500).json({ error: orderError.message });
     }
 
-    // 2. Create Stripe session
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       line_items: items.map((item) => ({
@@ -88,12 +85,10 @@ app.post("/create-checkout-session", async (req, res) => {
         },
         quantity: 1,
       })),
-
       success_url: process.env.SUCCESS_URL,
       cancel_url: process.env.CANCEL_URL,
-
       metadata: {
-        order_id: order.id, // IMPORTANT
+        order_id: order.id,
       },
     });
 
@@ -104,7 +99,8 @@ app.post("/create-checkout-session", async (req, res) => {
 });
 
 /* =========================
-   WEBHOOK (FIXED VERSION)
+   WEBHOOK (CRITICAL FIX)
+   MUST COME BEFORE express.json()
 ========================= */
 app.post(
   "/webhook",
@@ -123,15 +119,12 @@ app.post(
         process.env.STRIPE_WEBHOOK_SECRET
       );
     } catch (err) {
-      console.log("❌ Webhook signature error:", err.message);
+      console.log("❌ Webhook error:", err.message);
       return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
     console.log("Event type:", event.type);
 
-    // =========================
-    // PAYMENT SUCCESS
-    // =========================
     if (event.type === "checkout.session.completed") {
       const session = event.data.object;
 
@@ -141,17 +134,20 @@ app.post(
 
       const { data, error } = await supabase
         .from("orders")
-        .update({
-          status: "paid",
-        })
+        .update({ status: "paid" })
         .eq("id", orderId);
 
-      console.log("Supabase update result:", data, error);
+      console.log("Supabase update:", data, error);
     }
 
     res.json({ received: true });
   }
 );
+
+/* =========================
+   JSON MIDDLEWARE (AFTER WEBHOOK)
+========================= */
+app.use(express.json());
 
 /* =========================
    START SERVER

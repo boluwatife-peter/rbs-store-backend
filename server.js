@@ -14,14 +14,52 @@ app.use(cors());
 app.use(express.json());
 
 /* =========================
-   STRIPE + SUPABASE
+   STRIPE
 ========================= */
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
+/* =========================
+   SUPABASE
+========================= */
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
+
+/* =========================
+   TEST ORDER ROUTE
+========================= */
+app.get("/test-order", async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("orders")
+      .insert([
+        {
+          customer_name: "Peter",
+          customer_email: "test@example.com",
+          product_name: "Test Product",
+          quantity: 1,
+          total_price: 100,
+          status: "pending"
+        }
+      ])
+      .select();
+
+    if (error) {
+      return res.status(500).json(error);
+    }
+
+    res.json({
+      message: "Order saved successfully!",
+      data
+    });
+
+  } catch (err) {
+    res.status(500).json({
+      error: err.message
+    });
+  }
+});
 
 /* =========================
    CREATE CHECKOUT SESSION
@@ -30,7 +68,6 @@ app.post("/create-checkout-session", async (req, res) => {
   try {
     const items = req.body.items || [];
 
-    // 1. CREATE ORDER FIRST (PENDING)
     const { data: order, error: orderError } = await supabase
       .from("orders")
       .insert([
@@ -47,13 +84,14 @@ app.post("/create-checkout-session", async (req, res) => {
       .single();
 
     if (orderError) {
-      console.log("Supabase error:", orderError.message);
-      return res.status(500).json({ error: orderError.message });
+      return res.status(500).json({
+        error: orderError.message
+      });
     }
 
-    // 2. CREATE STRIPE SESSION
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
+
       line_items: items.map(item => ({
         price_data: {
           currency: "usd",
@@ -64,64 +102,64 @@ app.post("/create-checkout-session", async (req, res) => {
         },
         quantity: 1
       })),
+
       success_url: process.env.SUCCESS_URL,
       cancel_url: process.env.CANCEL_URL,
+
       metadata: {
         order_id: order.id
       }
     });
 
-    res.json({ url: session.url });
+    res.json({
+      url: session.url
+    });
 
   } catch (err) {
-    console.log("Server error:", err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({
+      error: err.message
+    });
   }
 });
 
 /* =========================
-   WEBHOOK (FIXED VERSION)
+   WEBHOOK
 ========================= */
 app.post("/webhook", express.raw({ type: "application/json" }), async (req, res) => {
-  const sig = req.headers["stripe-signature"];
+  const signature = req.headers["stripe-signature"];
 
   let event;
 
   try {
     event = stripe.webhooks.constructEvent(
       req.body,
-      sig,
+      signature,
       process.env.STRIPE_WEBHOOK_SECRET
     );
   } catch (err) {
-    console.log("Webhook error:", err.message);
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
-  // PAYMENT SUCCESS
   if (event.type === "checkout.session.completed") {
     const session = event.data.object;
 
     const orderId = session.metadata.order_id;
 
-    console.log("PAYMENT SUCCESS:", orderId);
-
-    // update Supabase
-    const { error } = await supabase
+    await supabase
       .from("orders")
-      .update({ status: "paid" })
+      .update({
+        status: "paid"
+      })
       .eq("id", orderId);
-
-    if (error) {
-      console.log("Supabase update error:", error.message);
-    }
   }
 
-  res.json({ received: true });
+  res.json({
+    received: true
+  });
 });
 
 /* =========================
-   SERVER START
+   START SERVER
 ========================= */
 const PORT = process.env.PORT || 3000;
 

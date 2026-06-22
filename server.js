@@ -32,29 +32,6 @@ app.get("/", (req, res) => {
 });
 
 /* =========================
-   TEST SUPABASE
-========================= */
-app.get("/test-order", async (req, res) => {
-  const { data, error } = await supabase
-    .from("orders")
-    .insert([
-      {
-        customer_name: "Test User",
-        customer_email: "test@example.com",
-        product_name: "Test Product",
-        quantity: 1,
-        total_price: 100,
-        status: "pending",
-      },
-    ])
-    .select();
-
-  if (error) return res.status(500).json(error);
-
-  res.json({ message: "Inserted", data });
-});
-
-/* =========================
    CREATE CHECKOUT SESSION
 ========================= */
 app.post("/create-checkout-session", async (req, res) => {
@@ -90,7 +67,7 @@ app.post("/create-checkout-session", async (req, res) => {
 });
 
 /* =========================
-   WEBHOOK (FINAL FIXED VERSION)
+   WEBHOOK (FIXED FOR YOUR TABLE)
 ========================= */
 app.post(
   "/webhook",
@@ -115,35 +92,31 @@ app.post(
 
     console.log("EVENT TYPE:", event.type);
 
-    /* =========================
-       SUCCESSFUL PAYMENT
-    ========================= */
     if (event.type === "checkout.session.completed") {
       const session = event.data.object;
 
       console.log("SESSION ID:", session.id);
-      console.log("METADATA:", session.metadata);
 
+      // Safely parse items
       let items = [];
-
       try {
         items = session.metadata?.items
           ? JSON.parse(session.metadata.items)
           : [];
       } catch (err) {
-        console.log("❌ Metadata parse error:", err.message);
+        console.log("❌ Items parse error:", err.message);
       }
 
       const insertData = {
         customer_email: session.customer_details?.email || "unknown",
-        product_name: items.length
+        customer_name: session.customer_details?.name || "guest",
+        products: items.length
           ? items.map((i) => i.name).join(", ")
           : "Stripe Order",
-        quantity: items.length || 1,
-        total_price: (session.amount_total || 0) / 100,
-        status: "paid",
-        stripe_session_id: session.id,
+        payment_status: "paid",
       };
+
+      console.log("INSERT DATA:", insertData);
 
       const { data, error } = await supabase
         .from("orders")
@@ -174,4 +147,3 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Server running on port " + PORT);
 });
-);

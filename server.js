@@ -22,15 +22,18 @@ const supabase = createClient(
 ========================= */
 app.use(cors());
 
-/* IMPORTANT: webhook must come BEFORE json parser */
+/* IMPORTANT: webhook MUST come before express.json() */
 
 /* =========================
-   TEST ROUTE
+   HEALTH CHECK
 ========================= */
 app.get("/", (req, res) => {
   res.send("Server is running");
 });
 
+/* =========================
+   TEST SUPABASE
+========================= */
 app.get("/test-order", async (req, res) => {
   const { data, error } = await supabase
     .from("orders")
@@ -118,24 +121,40 @@ app.post(
     if (event.type === "checkout.session.completed") {
       const session = event.data.object;
 
-      console.log("SESSION:", session);
+      console.log("SESSION ID:", session.id);
+      console.log("METADATA:", session.metadata);
 
-      const items = JSON.parse(session.metadata.items || "[]");
+      let items = [];
+
+      try {
+        items = session.metadata?.items
+          ? JSON.parse(session.metadata.items)
+          : [];
+      } catch (err) {
+        console.log("❌ Metadata parse error:", err.message);
+      }
+
+      const insertData = {
+        customer_email: session.customer_details?.email || "unknown",
+        product_name: items.length
+          ? items.map((i) => i.name).join(", ")
+          : "Stripe Order",
+        quantity: items.length || 1,
+        total_price: (session.amount_total || 0) / 100,
+        status: "paid",
+        stripe_session_id: session.id,
+      };
 
       const { data, error } = await supabase
         .from("orders")
-        .insert([
-          {
-            customer_email: session.customer_details?.email || "unknown",
-            product_name: items.map((i) => i.name).join(", "),
-            quantity: items.length,
-            total_price: session.amount_total / 100,
-            status: "paid",
-            stripe_session_id: session.id,
-          },
-        ]);
+        .insert([insertData])
+        .select();
 
-      console.log("SUPABASE INSERT:", data, error);
+      if (error) {
+        console.log("❌ SUPABASE ERROR:", error);
+      } else {
+        console.log("✅ SUPABASE SUCCESS:", data);
+      }
     }
 
     res.json({ received: true });
@@ -155,3 +174,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Server running on port " + PORT);
 });
+);

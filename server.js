@@ -22,13 +22,30 @@ const supabase = createClient(
 ========================= */
 app.use(cors());
 
-/* IMPORTANT: webhook MUST come before express.json() */
-
 /* =========================
    HEALTH CHECK
 ========================= */
 app.get("/", (req, res) => {
   res.send("Server is running");
+});
+
+/* =========================
+   TEST SUPABASE (IMPORTANT DEBUG ROUTE)
+========================= */
+app.get("/test-supabase", async (req, res) => {
+  const { data, error } = await supabase
+    .from("orders")
+    .insert([
+      {
+        customer_email: "test@test.com",
+        product: [],
+        total: 10,
+        payment_status: "paid",
+      },
+    ])
+    .select();
+
+  res.json({ data, error });
 });
 
 /* =========================
@@ -67,7 +84,7 @@ app.post("/create-checkout-session", async (req, res) => {
 });
 
 /* =========================
-   WEBHOOK (FIXED FOR YOUR TABLE)
+   WEBHOOK (FINAL WORKING VERSION)
 ========================= */
 app.post(
   "/webhook",
@@ -97,22 +114,22 @@ app.post(
 
       console.log("SESSION ID:", session.id);
 
-      // Safely parse items
       let items = [];
       try {
         items = session.metadata?.items
           ? JSON.parse(session.metadata.items)
           : [];
       } catch (err) {
-        console.log("❌ Items parse error:", err.message);
+        console.log("❌ Metadata parse error:", err.message);
       }
 
       const insertData = {
         customer_email: session.customer_details?.email || "unknown",
-        customer_name: session.customer_details?.name || "guest",
-        products: items.length
-          ? items.map((i) => i.name).join(", ")
-          : "Stripe Order",
+
+        product: items.length ? items : [],
+
+        total: (session.amount_total || 0) / 100,
+
         payment_status: "paid",
       };
 
@@ -138,25 +155,6 @@ app.post(
    JSON PARSER (AFTER WEBHOOK)
 ========================= */
 app.use(express.json());
-
-/* =========================
-   DEBUG SUPABASE
-========================= */
-app.get("/debug-supabase", async (req, res) => {
-  const { data, error } = await supabase
-    .from("orders")
-    .insert([
-      {
-        customer_email: "debug@test.com",
-        customer_name: "Debug User",
-        products: "Test Product",
-        payment_status: "paid"
-      }
-    ])
-    .select();
-
-  res.json({ data, error });
-});
 
 /* =========================
    START SERVER

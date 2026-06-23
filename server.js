@@ -140,13 +140,9 @@ app.post(
 app.use(express.json());
 
 /* =========================
-   START SERVER
+   DEBUG SUPABASE
 ========================= */
-const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, () => {
-  console.log("Server running on port " + PORT);
-   app.get("/debug-supabase", async (req, res) => {
+app.get("/debug-supabase", async (req, res) => {
   const { data, error } = await supabase
     .from("orders")
     .insert([
@@ -160,4 +156,13 @@ app.listen(PORT, () => {
     .select();
 
   res.json({ data, error });
+});
+
+/* =========================
+   START SERVER
+========================= */
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log("Server running on port " + PORT);
 });

@@ -146,4 +146,18 @@ const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
   console.log("Server running on port " + PORT);
+   app.get("/debug-supabase", async (req, res) => {
+  const { data, error } = await supabase
+    .from("orders")
+    .insert([
+      {
+        customer_email: "debug@test.com",
+        customer_name: "Debug User",
+        products: "Test Product",
+        payment_status: "paid"
+      }
+    ])
+    .select();
+
+  res.json({ data, error });
 });

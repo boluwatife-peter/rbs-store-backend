@@ -21,35 +21,37 @@ const supabase = createClient(
    MIDDLEWARE
 ========================= */
 app.use(cors());
+app.use(express.json()); // IMPORTANT for normal routes
 
 /* =========================
-   HEALTH CHECK
+   HOME
 ========================= */
 app.get("/", (req, res) => {
-  res.send("Server is running");
+  res.send("Server running");
 });
 
 /* =========================
-   TEST SUPABASE (IMPORTANT DEBUG ROUTE)
+   GET ORDERS (PAID PAGE USES THIS)
 ========================= */
-app.get("/test-supabase", async (req, res) => {
+app.get("/orders", async (req, res) => {
   const { data, error } = await supabase
     .from("orders")
-    .insert([
-      {
-        customer_email: "test@test.com",
-        product: [],
-        total: 10,
-        payment_status: "paid",
-      },
-    ])
-    .select();
+    .select("*")
+    .order("created_at", { ascending: false });
 
   res.json({ data, error });
 });
 
 /* =========================
-   CREATE CHECKOUT SESSION
+   DEBUG SUPABASE
+========================= */
+app.get("/debug-supabase", async (req, res) => {
+  const { data, error } = await supabase.from("orders").select("*");
+  res.json({ data, error });
+});
+
+/* =========================
+   STRIPE CHECKOUT
 ========================= */
 app.post("/create-checkout-session", async (req, res) => {
   try {
@@ -84,26 +86,26 @@ app.post("/create-checkout-session", async (req, res) => {
 });
 
 /* =========================
-   WEBHOOK (FINAL WORKING VERSION)
+   STRIPE WEBHOOK (IMPORTANT)
 ========================= */
 app.post(
   "/webhook",
   express.raw({ type: "application/json" }),
   async (req, res) => {
-    console.log("🔥 WEBHOOK RECEIVED");
+    console.log("🔥 WEBHOOK HIT");
 
-    const signature = req.headers["stripe-signature"];
+    const sig = req.headers["stripe-signature"];
 
     let event;
 
     try {
       event = stripe.webhooks.constructEvent(
         req.body,
-        signature,
+        sig,
         process.env.STRIPE_WEBHOOK_SECRET
       );
     } catch (err) {
-      console.log("❌ Stripe signature error:", err.message);
+      console.log("❌ Signature error:", err.message);
       return res.status(400).send("Webhook Error");
     }
 
@@ -112,9 +114,8 @@ app.post(
     if (event.type === "checkout.session.completed") {
       const session = event.data.object;
 
-      console.log("SESSION ID:", session.id);
-
       let items = [];
+
       try {
         items = session.metadata?.items
           ? JSON.parse(session.metadata.items)
@@ -125,11 +126,8 @@ app.post(
 
       const insertData = {
         customer_email: session.customer_details?.email || "unknown",
-
-        product: items.length ? items : [],
-
+        product: items,
         total: (session.amount_total || 0) / 100,
-
         payment_status: "paid",
       };
 
@@ -140,21 +138,13 @@ app.post(
         .insert([insertData])
         .select();
 
-      if (error) {
-        console.log("❌ SUPABASE ERROR:", error);
-      } else {
-        console.log("✅ SUPABASE SUCCESS:", data);
-      }
+      console.log("SUPABASE DATA:", data);
+      console.log("SUPABASE ERROR:", error);
     }
 
     res.json({ received: true });
   }
 );
-
-/* =========================
-   JSON PARSER (AFTER WEBHOOK)
-========================= */
-app.use(express.json());
 
 /* =========================
    START SERVER
